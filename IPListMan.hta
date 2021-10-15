@@ -1,0 +1,633 @@
+<html>
+<head>
+<TITLE> IP List Manipulator </TITLE>
+<HTA:APPLICATION
+	ID="objIPListMan"
+	APPLICATIONNAME="Transpose IP List"
+	SCROLL="yes"
+	SINGLEINSTANCE="no"
+	ICON="IPListManIcon.ico"
+>
+</head>
+<SCRIPT Language="VBScript">
+
+'Global variables
+Dim UserProfilePath
+Dim AppPath
+Dim DownloadPath
+Dim TempPath
+
+Sub Window_onLoad
+	' Set window size and move
+	window.moveTo 50,50
+	window.resizeTo 660,820
+	' Get user profile path
+	Dim objShell
+	Set objShell = CreateObject("WScript.Shell")
+	UserProfilePath = objShell.ExpandEnvironmentStrings("%USERPROFILE%")
+	TempPath = objShell.ExpandEnvironmentStrings("%TEMP%")
+	' Get application path (folder the obj was launched from). Takes the commandLine string to the right of the first " and up to but not including the last \
+	AppPath = Mid(objIPListMan.commandLine, "2", (InStrRev(objIPListMan.commandLine, "\") - 2))
+	' Initialize download path variable
+	DownloadPath = UserProfilePath + "\Downloads"
+	'OutputFile.value = UserProfilePath + "\Desktop\download.tmp" + " "
+End Sub 
+
+Sub ExitProgram
+	window.close()
+End Sub
+
+Sub About
+	'// Version 0.6 12/31/2015
+	Dim message
+	message = "IP List Manager" & vbCrLf & "Version: 0.6" & vbCrLf & "Last Updated: 12/31/2015"
+	msgbox(message)
+End Sub
+
+Sub TransposeList
+	If IPBox.value <> "" then
+		Dim transposed
+		transposed = IPBox.value
+		' Initial cleanup
+		transposed = CleanLines(transposed)
+		' Split line by line
+		Dim Lines
+		Lines = Split(transposed,vbCrLf)
+		' Check for comma in the first line. Make list if there is a comma, otherwise, comma separate each line.
+		If instr(Lines(0),",") then
+			transposed = ""
+			For Each Line in Lines
+				transposed = transposed & Replace(Line,",",vbcrlf) & vbCrLf
+			Next
+		Else
+			For Each Line in Lines
+				transposed = Replace(transposed,vbcrlf,",")
+			Next
+		End If
+		
+		' Final cleanup
+		transposed = CleanLines(transposed)
+		
+		IPBox.value = transposed
+	End If
+End Sub
+
+Sub ValidateIPs
+	'//Establish regex for IP
+	Dim reIP
+	Set reIP = new regexp
+	Dim IPValid
+	IPValid = True
+	Dim IPRange
+	Set IPRange = new regexp
+	IPRange.Pattern = "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)-(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+	
+	'//validate IPs (one on each line - vbCrLf)
+	reIP.Pattern = "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+	IPs = IPBox.Value
+	If IPs <> "" then
+		IPLines = Split(IPs, vbCrLf)
+		NotificationTitle.value = "Invalid IPs:" + vbCrLf
+		Notification.value = ""
+		For Each IP in IPLines
+			If not reIP.Test(IP) and not IPRange.Test(IP) and IP <> "" then
+				Notification.value = Notification.value + IP + vbCrLf
+				IPValid = false
+			Elseif IPRange.Test(IP) and IP <> "" then
+				IPRanges = IP + vbCrLf
+				IPValid = false
+			End if
+		Next
+		If IPValid then
+			NotificationTitle.value = "All IPs are valid."
+			Notification.value = ""
+		Elseif IPRanges <> "" then
+			Notification.value = Notification.value + vbCrLf + "IPRanges:" + vbCrLf + IPRanges
+		End If
+	Else
+		Notification.Title = ""
+		Notification.value = ""
+	End IF
+	
+End Sub
+
+Sub ExpandIPs
+	Dim expanded
+	expanded = ""
+	Dim Ranges
+	Ranges = Split(IPBox.value,vbCrLf)
+	For each range in Ranges
+		expanded = expanded & ExpandIPRange(range) & vbCrLf
+	Next
+	IPBox.value = CleanLines(expanded)
+End Sub
+
+Sub PingIPs
+	Dim reIP
+	Set reIP = new regexp
+	Dim IPCount
+	IPCount = 0
+	NotificationTitle.value = ""
+	Notification.value = ""
+	
+	'//validate IPs (one on each line - vbCrLf)
+	reIP.Pattern = "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+	IPs = IPBox.Value
+	If IPs <> "" then
+		IPLines = Split(IPs, vbCrLf)
+		For Each IP in IPLines
+			If reIP.Test(IP) and IP <> "" then
+				Dim hostname
+				hostname = ""
+				Dim accessed 
+				accessed = ""
+				
+				'//requires Ping command and parsing to output IP, hostname and active/inactive (tab separated - vbTab)
+				'Dim cmd
+				'Set cmd = CreateObject("WScript.Shell")
+				'Dim cmdOut
+				'cmdOut = cmd.run("cmd /c ping -a " & IP,1,true)
+				'//remove note:: some possible options: http://stackoverflow.com/questions/5690134/running-command-line-silently-with-vbscript-and-getting-output#5690211
+				'Notification.value = Notification.value & vbCrLf & IP & vbTab & hostname & vbTab & accessed & cmdOut
+				
+				Dim WshShell, oExec, pingCmd
+				Set WshShell = CreateObject("WScript.Shell")
+				pingCmd = "ping -a -n 1 -w 1000 " & IP
+				Set pingExec = WshShell.Exec(pingCmd)
+				pingOutput = pingExec.StdOut.ReadAll
+				
+				'//Remove note:: exec output: http://www.codeproject.com/Tips/507798/Differences-between-Run-and-Exec-VBScript
+				
+				'//Extract info from pingOutput
+				Dim outputLines
+				Dim status
+				Dim hostnm
+				Dim FQDN
+				outputLines = Split(pingOutput,vbCrLf)
+				status = ""
+				hostnm = ""
+				FQDN = ""
+				For Each line in outputLines
+					If left(line, 7) = "Pinging" then
+						If instr(line,"[") then
+							FQDN = mid(line, 8, instr(line,"[") -1)
+							hostnm = left(FQDN, instr(FQDN,".") -1)
+						Else
+							hostnm = "Unknown"
+						End If
+					End If
+					
+					'//Status:
+					If instr(line, "Request timed out.") then
+						status = "Unavailable (timeout)"
+					Elseif instr(line, "TTL expired in transit") then
+						status = "Unavailable (TTL expired)"
+					Elseif instr(line, "Reply from") then
+						status = "Available"
+					End If
+				Next
+				
+				Notification.value = Notification.value & vbCrLf & IP & vbTab & hostnm & vbTab & status
+			Else
+				Notification.value = Notification.value & "Invalid IP: " & IP
+			End If
+		Next
+	Else
+		NotificationTitle.value = ""
+		Notification.value = ""
+	End IF
+	NotificationTitle.value = "Pings complete."
+End Sub
+
+Sub PingHost
+	
+	NotificationTitle.value = ""
+	Notification.value = ""
+	HostsToPing = IPBox.Value
+	If HostsToPing <> "" then
+		Hosts = Split(HostsToPing, vbCrLf)
+		For Each hostnm in Hosts
+			If hostnm <> "" then
+				Dim hostname
+				hostname = ""
+				Dim accessed 
+				accessed = ""
+				
+				Dim WshShell, oExec, pingCmd
+				Set WshShell = CreateObject("WScript.Shell")
+				pingCmd = "ping -a -n 1 -w 1000 " & hostnm
+				Set pingExec = WshShell.Exec(pingCmd)
+				pingOutput = pingExec.StdOut.ReadAll
+				
+				'//Remove note:: exec output: http://www.codeproject.com/Tips/507798/Differences-between-Run-and-Exec-VBScript
+				
+				'//Extract info from pingOutput
+				Dim outputLines
+				Dim status
+				Dim hostnm
+				Dim FQDN
+				outputLines = Split(pingOutput,vbCrLf)
+				status = ""
+				hostnm = ""
+				FQDN = ""
+				IP = ""
+				For Each line in outputLines
+					If left(line, 7) = "Pinging" then
+						If instr(line,"[") then
+							FQDN = mid(line, 8, instr(line,"[") -1)
+							hostnm = left(FQDN, instr(FQDN,".") -1)
+							IP = mid(line, instr(line,"[")+1,instr(line,"]")-instr(line,"[")-1)
+						Else
+							hostnm = "Unknown"
+						End If
+					End If
+					
+					'//Status:
+					If instr(line, "Request timed out.") then
+						status = "Unavailable (timeout)"
+					Elseif instr(line, "TTL expired in transit") then
+						status = "Unavailable (TTL expired)"
+					Elseif instr(line, "Reply from") then
+						status = "Available"
+					End If
+				Next
+				
+				Notification.value = Notification.value & vbCrLf & hostnm & vbTab & IP & vbTab & status
+
+			End If
+		Next
+	Else
+		NotificationTitle.value = ""
+		Notification.value = ""
+	End IF
+	NotificationTitle.value = "Hostname Pings complete."
+End Sub
+
+Sub CountIPs
+	Dim reIP
+	Set reIP = new regexp
+	Dim IPCount
+	IPCount = 0
+	
+	'//validate IPs (one on each line - vbCrLf)
+	reIP.Pattern = "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+	IPs = IPBox.Value
+	If IPs <> "" then
+		IPLines = Split(IPs, vbCrLf)
+		For Each IP in IPLines
+			If reIP.Test(IP) and IP <> "" then
+				IPCount = IPCount + 1
+			Else
+				Notification.value = "Invalid IP: " & IP
+			End if
+		Next
+		NotificationTitle.value = "There are " & IPCount & " valid IPs."
+	Else
+		NotificationTitle.value = ""
+		Notification.value = ""
+	End IF
+	
+End Sub
+
+Sub CompareIPs
+	FirstListNotify = "Provide IPs above to compare"
+	SecondListNotify = "Enter a second list of IPs to compare:"
+	IPBox1.style.width = "50%"
+	IPBox2.style.display = "inline"
+	
+	If NotificationTitle.value = FirstListNotify then	
+		Dim matched
+		Dim unmatched1
+		Dim unmatched2
+		matched = ""
+		
+		IPGroup1 = CleanLines(IPBox.value)
+		IPGroup2 = CleanLines(IPBox2.value)
+		If IPGroup2 <> "" OR IPGroup2 <> SecondListNotify then
+			'// Ignore if item is "Enter a second list of IPs to compare:" (SecondListNotify) (first item in the list if prompt is left)
+			IPG1Lines = Split(IPGroup1, vbCrLf)
+			IPG2Lines = Split(IPGroup2, vbCrLf)
+			unmatched1 = ""
+			For Each IPG1 in IPG1Lines
+				found = false
+				For Each IPG2 in IPG2Lines
+					If IPG1 = IPG2 Then 
+						matched = matched & IPG1 & vbCrLf
+						found = true
+					End If
+				Next
+				If not found then
+					unmatched1 = unmatched1 & IPG1 & vbCrLf
+				End If
+			Next
+			unmatched2 = ""
+			For Each IPG2 in IPG2Lines
+				found = false
+				For Each IPG1 in IPG1Lines
+					If IPG2 = IPG1 Then
+						found = true
+					End If
+				Next
+				If not found then
+					unmatched2 = unmatched2 & IPG2 & vbCrLf
+				End If
+			Next
+		End If
+		IPBox.value = unmatched1
+		IPBox2.value = unmatched2
+		NotificationTitle.value = "Unmatched items are listed above; Matched items are listed below"
+		Notification.value = matched
+	Else
+		NotificationTitle.value = FirstListNotify
+		Notification.value = ""
+	End If
+
+End Sub
+
+Sub MoveNotifcationText
+	IPBox.Value = Notification.value
+End Sub
+
+Sub ClearIPs
+	IPBox.Value = ""
+	IPBox2.value = ""
+	NotificationTitle.value = ""
+	Notification.value = ""
+	IPBox2.style.display = "none"
+	IPBox.style.width = "100%"
+	HTMLNotify.innerHTML = ""
+End Sub
+
+Sub HostInfo
+	Dim hostnms
+	Dim HostRegLoc
+	hostnms = Split(IPBox.value, vbCrLf)
+	For Each hostnm in hostnms
+		HostRegLoc = HostRegLoc & HostRegInfo(hostnm) & vbCrLf
+	Next
+	Notification.value = HostRegLoc
+End Sub
+
+Sub FQDNtoHost
+	Dim fqdns
+	Dim hostnms
+	hostnms = ""
+	fqdns = Split(IPBox.value, vbCrLf)
+	For Each fqdn in fqdns
+		hostnms = hostnms & FQDNtoHostname(fqdn) & vbCrLf
+	Next
+	hostnms = cleanLines(hostnms)
+	Notification.value = hostnms
+End Sub
+
+Sub clean
+	IPBox.Value = cleanLines(IPBox.Value)
+	IPBox2.Value = cleanLines(IPBox2.Value)
+End Sub
+
+Sub SaveIPList
+	'//Save list of IPs to "memory"
+
+End Sub
+
+Sub getQualysUrl
+	HTMLNotify.innerHTML = "<a href=""https://qualysguard.qualys.com/fo/report/assetSearch.php?include_agt=1&ips_items=" & IPBox.value & """> Search Qualys </a>"
+End Sub
+
+Sub GetFromClipboard
+	IPBox.value = window.clipboardData.GetData("text")
+End Sub
+
+Sub SendToClipboard 
+    window.clipboardData.SetData "text",IPBox.value
+End Sub
+
+'FUNCTIONS:
+
+' Expands an IP range
+Function ExpandIPRange(range)
+	' Establish IP range test pattern
+	Dim rangePattern
+	Set rangePattern = new regexp
+	rangePattern.Pattern = "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)-(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+	' Initial Cleanup
+	range = cleanString(range)
+	
+	If range <> "" and rangePattern.Test(range) then
+		Dim IPRange
+		IPRange = Split(range, "-")
+		IPFirst = Split(IPRange(0),".")
+		IPLast = Split(IPRange(1),".")
+		If IPFirst(0) = IPLast(0) and IPFirst(1) = IPLast(1) and IPFirst(2) = IPLast(2) then
+			range = ""
+			For lastoctet = IPFirst(3) to IPLast(3)
+				range = range & IPFirst(0) & "." & IPFirst(1) & "." & IPFirst(2) & "." & lastoctet & vbCrLf
+			Next
+		Else
+			range = "First 3 octets do not match for " + range
+		End IF
+	End IF
+	
+	' Final Cleanup
+	ExpandIPRange = cleanLines(range)
+
+End Function
+
+' Provides the Region and location based on the standard 15 character hostname
+Function HostRegInfo(hostnm)
+	Dim HostLoc
+	Dim HostReg
+	HostLoc = "Unknown"
+	HostReg = "Unknown"
+	hostnm = CleanString(hostnm)
+	If len(hostnm)=15 then
+		If IsNumeric(right(hostnm,3)) then
+			HostReg = "Production"
+		Else
+			HostReg = "Lower Region"
+		End If
+		
+		rawLoc = lcase(mid(hostnm,5,3))
+		Select Case rawLoc
+			Case "rib"
+				HostLoc = "EPOC"
+			Case "mab"
+				HostLoc = "Medford"
+			Case "ncb"
+				HostLoc = "KMDC"
+		End Select
+	End If
+	
+	'Note: If 10.160.x.x for IP, then KMDC;may be other properties to know based on IP address - can be added here if integrated with ping.
+	
+	HostRegInfo = UCase(hostnm) & vbTab & HostLoc & vbTab & HostReg
+	
+End Function
+
+' Cleans white space (spaces and tabs) before and after each line of a multiline string
+Function CleanLines(uncleanLines)
+	Dim Lines
+	Dim cleanedLines
+	Lines = Split(uncleanLines, vbCrLf)
+	For Each Line in Lines
+		If Line <> "" then
+			cleanedLines = cleanedLines & CleanString(Line) & vbCrLf
+		End If
+	Next
+	Do while (right(cleanedLines, 1) = vbCrLf) or _
+			(right(cleanedLines, 1) = vbLf) or _
+			(right(cleanedLines, 1) = vbCr)
+		If right(cleanedLines, 1) = vbCrLf then
+			cleanedLines = left(cleanedLines, len(cleanedLines) - 1)
+		End If
+		If right(cleanedLines, 1) = vbLf then
+			cleanedLines = left(cleanedLines, len(cleanedLines) - 1)
+		End If
+		If right(cleanedLines, 1) = vbCr then
+			cleanedLines = left(cleanedLines, len(cleanedLines) - 1)
+		End If
+	Loop
+	CleanLines = cleanedLines
+End Function
+
+' Cleans white space (spaces and tabs) before and after a string
+Function CleanString(uncleanString)
+	Dim clean
+	clean = false
+	
+	Do while not clean
+		clean = true
+		'Check for leading and ending Tab
+		If clean and left(uncleanString, 1) = vbTab then
+			uncleanString = right(uncleanString, len(uncleanString) - 1)
+			clean = false
+		End If
+		If clean and right(uncleanString, 1) = vbTab then
+			uncleanString = left(uncleanString, len(uncleanString) - 1)
+			clean = false
+		End If
+		'Check for leading and ending Space
+		If clean and left(uncleanString, 1) = " " then
+			uncleanString = right(uncleanString, len(uncleanString) - 1)
+			clean = false
+		End If
+		If clean and right(uncleanString, 1) = " " then
+			uncleanString = left(uncleanString, len(uncleanString) - 1)
+			clean = false
+		End If
+		'Check for leading and ending comma
+		If clean and left(uncleanString, 1) = "," then
+			uncleanString = right(uncleanString, len(uncleanString) - 1)
+			clean = false
+		End If
+		If clean and right(uncleanString, 1) = "," then
+			uncleanString = left(uncleanString, len(uncleanString) - 1)
+			clean = false
+		End If
+	Loop
+	CleanString = uncleanString
+End Function
+
+' Extract the hostname from a FQDN (anything before the first ".")
+Function FQDNtoHostname(fqdn)
+	If instr(fqdn,".")then
+		fqdnSplit = Split(fqdn,".")
+		hostnm = fqdnSplit(0)
+	Else
+		hostnm = fqdn
+	End If
+	FQDNtoHostname = hostnm
+End Function
+
+</SCRIPT>
+<style>
+
+body {
+	background-color:lightblue;
+	text-align:left;
+	font:10 pt verdana;
+	color:black;
+	filter:progid:DXImageTransform.Microsoft.Gradient(GradientType=0, StartColorStr='#FFCC66', EndColorStr='#FFFFFF');
+}
+
+h1, h2, h3, h4, h5, h6 {font-family: 'Montez', cursive;
+color:#2d2d2d;
+}
+
+.runbutton {
+  position: relative;
+  height: 25px;
+  padding: 0;
+  font-size: 15px;
+  color: white;
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  background: #34495e;
+  border: 0;
+  border-bottom: 2px solid #263849;
+  cursor: pointer;
+  -webkit-box-shadow: inset 0 -2px #263849;
+  box-shadow: inset 0 -2px #263849;
+}
+
+.rightbutton {
+	vertical-align:top;
+}
+
+.textInput{
+	border:0;
+	width:100%;
+	display:inline;
+	overflow:auto;
+}
+
+.textOutput{
+	width:100%;
+	background-color:lightgray;
+	overflow:auto;
+}
+</style>
+<body>
+
+<div style="position:relative; top:0px; width:100%">
+	<input class="sysbutton" type="button" value="Exit" onClick="ExitProgram"></input>
+	<input class="sysbutton" type="button" value="About" onClick="About"></input></br>
+</div>
+<hr>
+	<input class="runbutton" type="button" value="Clear" onClick="ClearIPs"></input>
+	<input class="runbutton" type="button" value="Copy" onClick="SendToClipboard"></input>
+	<input class="runbutton" type="button" value="Paste" onClick="GetFromClipboard"></input>
+	<input class="runbutton" type="button" value="Clean" name="run_button"  onClick="Clean">
+	<input class="runbutton" type="button" value="Expand IPs" name="run_button"  onClick="ExpandIPs">
+	<input class="runbutton" type="button" value="Transpose List" name="run_button"  onClick="TransposeList">
+	<input class="runbutton" type="button" value="Compare" onClick="CompareIPs"></input>
+</br>
+<hr>
+<!--TransposeIP Box-->
+<div id=BoxLabel>
+IPs:</br>
+<div style="width:100%">
+<textarea id=IPBox1 class="textInput" name="IPBox" rows=20 style="float:left"></textarea>
+<textarea id=IPBox2 class="textInput" name="IPBox2" rows=20 style="display:none"></textarea>
+</br>
+</div>
+<div>
+<input class="runbutton" type="button" value="^" name="run_button"  onClick="MoveNotifcationText">
+<input class="runbutton rightbutton" type="button" value="Validate IPs" name="run_button"  onClick="ValidateIPs">
+<input class="runbutton rightbutton" type="button" value="Count IPs" name="run_button"  onClick="CountIPs">
+<input class="runbutton rightbutton" type="button" value="Ping Valid IPs" name="run_button"  onClick="PingIPs"></br>
+<input class="runbutton" type="button" value="HostInfo" onClick="HostInfo"></input>
+<input class="runbutton" type="button" value="FQDNtoHost" onClick="FQDNtoHost"></input>
+<input class="runbutton rightbutton" type="button" value="Ping Host" name="run_button"  onClick="PingHost"></br>
+</br>
+<textarea class="textOutput" name="NotificationTitle" rows=1 readonly=true></textarea></br>
+<textarea class="textOutput" name="Notification" rows=10 readonly=true></textarea></br>
+</div>
+<hr>
+<input class="runbutton" type="button" value="Qualys Search URL" onClick="getQualysUrl"></input></br>
+<div id=HTMLNotify>
+
+</div>
+</body>
+</html>
+
